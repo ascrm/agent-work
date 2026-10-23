@@ -1,51 +1,36 @@
-from typing import Protocol
-from uuid import UUID
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.task import Task
 
 
-class TaskRepository(Protocol):
-    """数据访问接口。W4 接入 PostgreSQL 时新增实现即可，路由层不用改。"""
+class TaskRepository:
+    """数据访问层：只负责读写数据库，不含业务规则。
 
-    def add(self, task: Task) -> Task: ...
+    业务规则（比如状态流转是否合法）放在 service 层。
+    这样换数据库、写单元测试时，业务逻辑都不用改。
+    """
 
-    def get(self, task_id: UUID) -> Task | None: ...
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
 
-    def list(self) -> list[Task]: ...
-
-    def save(self, task: Task) -> Task: ...
-
-    def clear(self) -> None: ...
-
-
-class InMemoryTaskRepository:
-    """W1 用的内存实现。进程重启数据即丢失 —— 这是有意为之，不是缺陷。"""
-
-    def __init__(self) -> None:
-        self._tasks: dict[UUID, Task] = {}
-
-    def add(self, task: Task) -> Task:
-        self._tasks[task.id] = task
+    async def add(self, task: Task) -> Task:
+        self.session.add(task)
+        await self.session.commit()
+        await self.session.refresh(task)
         return task
 
-    def get(self, task_id: UUID) -> Task | None:
-        return self._tasks.get(task_id)
+    async def get(self, task_id: int) -> Task | None:
+        return await self.session.get(Task, task_id)
 
-    def list(self) -> list[Task]:
-        # 新任务排在前面
-        return sorted(self._tasks.values(), key=lambda t: t.created_at, reverse=True)
+    async def list(self, limit: int, offset: int) -> tuple[list[Task], int]:
+        total = await self.session.scalar(select(func.count()).select_from(Task))
+        result = await self.session.scalars(
+            select(Task).order_by(Task.id.desc()).limit(limit).offset(offset)
+        )
+        return list(result), total or 0
 
-    def save(self, task: Task) -> Task:
-        self._tasks[task.id] = task
+    async def save(self, task: Task) -> Task:
+        await self.session.commit()
+        await self.session.refresh(task)
         return task
-
-    def clear(self) -> None:
-        self._tasks.clear()
-
-
-_repository = InMemoryTaskRepository()
-
-
-def get_task_repository() -> TaskRepository:
-    """FastAPI 依赖注入入口。测试里可以直接覆写它。"""
-    return _repository

@@ -1,7 +1,3 @@
-from app.repositories.task_repository import (
-    InMemoryTaskRepository,
-    TaskRepository,
-    get_task_repository,
-)
+from app.repositories.task_repository import TaskRepository
 
-__all__ = ["InMemoryTaskRepository", "TaskRepository", "get_task_repository"]
+__all__ = ["TaskRepository"]

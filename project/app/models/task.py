@@ -1,81 +1,48 @@
 from datetime import UTC, datetime
 from enum import StrEnum
-from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from sqlalchemy import DateTime, String, Text
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database import Base
 
 
 class TaskStatus(StrEnum):
-    """任务状态。Agent 在第 5 周会由程序自动推进这些状态。"""
-
     PENDING = "pending"
     RUNNING = "running"
-    WAITING_APPROVAL = "waiting_approval"  # 高风险操作等待人工确认
+    WAITING_APPROVAL = "waiting_approval"
     DONE = "done"
     FAILED = "failed"
     CANCELLED = "cancelled"
-
-
-# 状态流转白名单。不在表里的流转一律拒绝，避免程序把任务推进到矛盾状态。
-ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
-    TaskStatus.PENDING: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
-    TaskStatus.RUNNING: {
-        TaskStatus.WAITING_APPROVAL,
-        TaskStatus.DONE,
-        TaskStatus.FAILED,
-        TaskStatus.CANCELLED,
-    },
-    TaskStatus.WAITING_APPROVAL: {
-        TaskStatus.RUNNING,
-        TaskStatus.FAILED,
-        TaskStatus.CANCELLED,
-    },
-    TaskStatus.DONE: set(),
-    TaskStatus.FAILED: set(),
-    TaskStatus.CANCELLED: set(),
-}
 
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-class TaskCreate(BaseModel):
-    """创建任务的请求体。所有字段必填，长度受限。"""
+class Task(Base):
+    """任务表。这是数据库结构，不是接口结构（接口结构在 schemas/task.py）。"""
 
-    title: str = Field(min_length=1, max_length=200, description="任务标题")
-    goal: str = Field(min_length=1, max_length=5000, description="用户提交的目标描述")
+    __tablename__ = "tasks"
 
-
-class TaskUpdate(BaseModel):
-    """更新任务的请求体。全部可选 —— 只更新传入的字段。"""
-
-    title: str | None = Field(default=None, min_length=1, max_length=200)
-    status: TaskStatus | None = None
-    result: str | None = Field(default=None, max_length=20000, description="执行结果")
-    error: str | None = Field(default=None, max_length=5000, description="失败原因")
-
-
-class Task(BaseModel):
-    """任务实体。同时也是接口的响应模型。"""
-
-    id: UUID = Field(default_factory=uuid4)
-    title: str
-    goal: str
-    status: TaskStatus = TaskStatus.PENDING
-    result: str | None = None
-    error: str | None = None
-    created_at: datetime = Field(default_factory=_utcnow)
-    updated_at: datetime = Field(default_factory=_utcnow)
-
-    @classmethod
-    def new(cls, *, title: str, goal: str) -> "Task":
-        """新任务的创建入口：保证 created_at 与 updated_at 完全一致。"""
-        now = _utcnow()
-        return cls(title=title, goal=goal, created_at=now, updated_at=now)
-
-    def can_transition_to(self, new_status: TaskStatus) -> bool:
-        return new_status in ALLOWED_TRANSITIONS[self.status]
-
-    def touch(self) -> None:
-        self.updated_at = _utcnow()
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(200))
+    goal: Mapped[str] = mapped_column(Text)
+    status: Mapped[TaskStatus] = mapped_column(
+        # native_enum=False：用 VARCHAR 存字符串，SQLite 和 PostgreSQL 都能跑
+        SAEnum(
+            TaskStatus,
+            native_enum=False,
+            values_callable=lambda enum: [member.value for member in enum],
+            length=32,
+        ),
+        default=TaskStatus.PENDING,
+        index=True,
+    )
+    result: Mapped[str | None] = mapped_column(Text, default=None)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )

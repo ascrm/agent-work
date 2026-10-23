@@ -1,13 +1,33 @@
 import pytest
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.main import app
-from app.repositories.task_repository import get_task_repository
+from app.database import Base, get_session
+from app.main import create_app
 
 
 @pytest.fixture
-def client() -> TestClient:
-    """每个测试都拿到干净的内存仓库，测试之间互不影响。"""
-    get_task_repository().clear()
-    with TestClient(app) as test_client:
+async def client(tmp_path):
+    """每个测试用独立的临时数据库，测试之间完全隔离。
+
+    注意：ASGITransport 不会触发 lifespan，所以这里手动建表，
+    并覆盖 get_session 依赖指向测试库。
+    """
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def override_get_session():
+        async with session_factory() as session:
+            yield session
+
+    app = create_app()
+    app.dependency_overrides[get_session] = override_get_session
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as test_client:
         yield test_client
+
+    await engine.dispose()

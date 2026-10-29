@@ -8,14 +8,17 @@
 ## 快速开始
 
 ```bash
-cp .env.example .env          # 可选，不复制也能跑（有默认值）
+cp .env.example .env          # 复制后填入 APP_LLM_API_KEY
 python -m uv sync
-python -m uv run pytest       # 13 个测试
+python -m uv run pytest       # 21 个测试
 python -m uv run uvicorn app.main:app --reload
 ```
 
 - 接口文档：http://127.0.0.1:8000/docs
 - 健康检查：`GET /health`、`GET /health/ready`
+- 对话接口：`POST /api/v1/assistant/chat`
+
+> 没有配置 `APP_LLM_API_KEY` 也能启动和跑测试，只有调用 `/assistant` 接口时返回 503。
 
 ## 建议阅读顺序
 
@@ -71,13 +74,19 @@ app/
 │   ├── deps.py             # 依赖注入链
 │   └── v1/
 │       ├── health.py       # 存活 / 就绪探针
-│       └── tasks.py        # 任务路由
+│       ├── tasks.py        # 任务路由
+│       └── assistant.py    # 对话路由（W2）
 ├── models/task.py          # SQLAlchemy ORM 模型
 ├── schemas/                # Pydantic 请求/响应模型
 │   ├── common.py           # 通用分页 Page[T]
-│   └── task.py
+│   ├── task.py
+│   └── assistant.py        # 对话模型（W2）
 ├── repositories/           # 数据访问
 ├── services/               # 业务规则
+│   ├── task_service.py
+│   └── assistant_service.py # 工具调用循环（W2）
+├── llm/client.py           # 模型适配层：超时 / 重试 / token（W2）
+├── tools/task_tools.py     # 工具 schema + 执行（W2）
 └── core/                   # 横切关注点
     ├── exceptions.py       # 业务异常
     ├── handlers.py         # 异常 → HTTP
@@ -86,7 +95,38 @@ app/
 tests/
 ├── conftest.py             # 每个测试独立临时数据库
 ├── test_health.py
-└── test_tasks.py
+├── test_tasks.py
+└── test_assistant.py       # 用假模型测试工具调用循环
+```
+
+## W2：工具调用
+
+```
+用户消息 + 工具列表 → 模型
+     ↑                  ↓
+     └── 工具结果 ←── tool_calls
+```
+
+模型不会执行任何东西，它只输出"要调用 `query_task_status`，参数是 `{task_id: 1}`"，
+执行发生在 `app/tools/task_tools.py`。
+
+调用示例：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/assistant/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "任务 1 现在什么状态？"}'
+```
+
+响应会带上完整的工具轨迹，方便观察循环：
+
+```json
+{
+  "content": "任务 1 当前状态是 pending。",
+  "tool_calls": [{"name": "query_task_status", "arguments": "{\"task_id\": 1}", "result": "..."}],
+  "steps": 2,
+  "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+}
 ```
 
 ## 对照 Spring Boot

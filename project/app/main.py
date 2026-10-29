@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import health, tasks
+from app.api.v1 import assistant, health, tasks
 from app.config import settings
 from app.core.handlers import register_exception_handlers
 from app.core.logging import setup_logging
@@ -49,6 +49,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(tasks.router, prefix="/api/v1")
+    app.include_router(assistant.router, prefix="/api/v1")
 
     return app
 

@@ -21,3 +21,13 @@ class NotFoundError(AppError):
 class ConflictError(AppError):
     status_code = 409
     code = "conflict"
+
+
+class LLMUnavailableError(AppError):
+    status_code = 503
+    code = "llm_unavailable"
+
+
+class AssistantLoopError(AppError):
+    status_code = 502
+    code = "assistant_loop_exceeded"
